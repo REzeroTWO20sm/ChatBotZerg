@@ -17,6 +17,14 @@
 #include <QTextEdit>
 #include <QObject>
 #include <QUrl>
+#include <nlohmann/json.hpp>
+#include <string>
+#include <curl/curl.h>
+#include <chrono>
+#include <ctime>
+#include <iostream>
+using namespace std;
+using namespace nlohmann;
 
 class Message {
 public:
@@ -24,6 +32,82 @@ public:
     QString sender;
     QDateTime timestamp;
 };
+
+size_t WriteCallback(void *contents, size_t size, size_t nmemb, std::string *s) {
+    size_t newLength = size * nmemb;
+    try {
+        s->append((char *)contents, newLength);
+    } catch (std::bad_alloc &e) {
+        // Обработка ошибок при нехватке памяти
+        return 0;
+    }
+    return newLength;
+}
+
+pair<std::string, std::string> take_cords(string address){
+    CURL *curl;
+    CURLcode res;
+    string readBuffer;
+    stringstream lat_ss;
+    stringstream lon_ss;
+    float lat_f;
+    float lon_f;
+    string lat;
+    string lon;
+    string url;
+    curl = curl_easy_init();
+    if(curl){
+        //"https://catalog.api.2gis.com/3.0/items/geocode?q=Москва, Садовническая, 25&fields=items.point&key=499ee3fd-1a17-4c8f-be92-5263b3470dc8
+        url = "https://catalog.api.2gis.com/3.0/items/geocode?q=" + address + "&fields=items.point&key=499ee3fd-1a17-4c8f-be92-5263b3470dc8";
+        /* string url = "https://geocode-maps.yandex.ru/1.x/?apikey=dbcd5d6e-f034-4c9e-a84d-11c201dbd4d4&lang=ru_RU&geocode="+ city +"&format=json"; определение station города*/
+        curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &readBuffer);
+        res = curl_easy_perform(curl);
+        if (res == CURLE_OK){
+            json response = json::parse(readBuffer);
+            lat_f = response["result"]["items"][0]["point"]["lat"];
+            lon_f = response["result"]["items"][0]["point"]["lon"];
+            lat_ss << lat_f;
+            lon_ss << lon_f;
+            lat  = lat_ss.str();
+            lon = lon_ss.str();
+            /*pos = pos.replace(pos.find(" "),1,"&lat=");*/                                                                                                                        //37.617698&lan=55.755864
+            
+        }
+        else {
+            std::cerr << "Ошибка при выполнении запроса: " << curl_easy_strerror(res) << std::endl;
+        }
+        curl_easy_cleanup(curl);
+    }
+    curl_global_cleanup();
+    return make_pair(lat, lon);
+}
+
+json getFiveDayWeatherForecast(const std::string &apiKey, string lat , string lon) {
+    CURL *curl;
+    CURLcode res;
+    std::string readBuffer;
+    json response;
+
+    curl = curl_easy_init();
+    if (curl) {
+        std::string url = "http://api.openweathermap.org/data/2.5/forecast?&lat="+lat+"&lon="+lon+"&appid=" + apiKey;
+        cout << endl << url << endl;
+        curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &readBuffer);
+        res = curl_easy_perform(curl);
+        if (res == CURLE_OK) {
+            response = json::parse(readBuffer);
+            readBuffer.clear();
+        } else {
+            std::cerr << "Ошибка при выполнении запроса: " << curl_easy_strerror(res) << std::endl;
+        }
+        curl_easy_cleanup(curl);
+    }
+    return response;
+}
 
 void setWindowSize(QMainWindow& window, int width, int height) {
     window.resize(width, height);
@@ -137,6 +221,7 @@ void getTime(QTextEdit* chatBox) {
 }
 
 void respondToMessage(QTextEdit* chatBox, const QString& messageText, QList<Message>& messageHistory) {
+    std::string apiKey = "1ff15930de8f02537dc1d994d0ad603e";
     if (messageText.toLower() == "привет" ) {
         chatBox->append("\nBot: Привет!");
         addMessageToHistory(messageHistory, "Bot", "Привет!");
@@ -149,11 +234,24 @@ void respondToMessage(QTextEdit* chatBox, const QString& messageText, QList<Mess
     } else if (messageText.toLower() == "время") {
        getTime(chatBox);
        addMessageToHistory(messageHistory, "Bot", "Текущее время: " + QDateTime::currentDateTime().toString("hh:mm:ss"));
+    }else if (messageText.contains(QRegularExpression("[A-ZА-Я]"))) { // messageText.contains(QRegularExpression("[0-9\\+\\-\\*\\/\\(\\)]+"))
+        string message = messageText.toStdString(); // moscov
+        pair<string, string> result = take_cords(message);
+        string lat = result.first;
+        string lon = result.second;
+        json fiveDayForecast = getFiveDayWeatherForecast(apiKey, lat,lon);
+        int i = 0;
+        std::string weather;
+        weather = std::to_string(fiveDayForecast["list"][0]["main"]["temp"].get<double>())+" "+fiveDayForecast["list"][0]["weather"][0]["description"].get<std::string>();
+        QString Qweather = QString::fromStdString(weather);
+        chatBox->append("\nBot: Погода " + Qweather);
+        addMessageToHistory(messageHistory, "Bot", "Погода " + Qweather);
     } else if (messageText.contains(QRegularExpression("[0-9\\+\\-\\*\\/\\(\\)]+"))) {
         double result = evaluateExpression(messageText);
         chatBox->append("\nBot: Результат: " + QString::number(result));
         addMessageToHistory(messageHistory, "Bot", "Результат: " + QString::number(result));
-    } else if (messageText.toLower() == "помощь") {
+    }
+    else if (messageText.toLower() == "помощь") {
         chatBox->append("\nBot: Доступные команды:");
         chatBox->append("1. привет - поприветствовать бота");
         chatBox->append("2. что такое боль - ответ");
@@ -161,7 +259,8 @@ void respondToMessage(QTextEdit* chatBox, const QString& messageText, QList<Mess
         chatBox->append("4. время - получить текущее время");
         chatBox->append("5. примерчик - вычислить результат выражения");
         chatBox->append("6. пока - закрытие программы");
-        addMessageToHistory(messageHistory, "Bot", "Доступные команды:\n1. привет \n2. что такое боль \n3. что такое радость \n4. Время \n5. примерчик \n 6. пока");
+        chatBox->append("7. Город - погода в городе");
+        addMessageToHistory(messageHistory, "Bot", "Доступные команды:\n1. привет \n2. что такое боль \n3. что такое радость \n4. Время \n5. примерчик \n 6. Город");
     } else if (messageText.toLower() == "пока") {
         chatBox->append("\nBofont-weight: bold;t: Пока");
         addMessageToHistory(messageHistory, "Bot", "Пока");
@@ -230,6 +329,7 @@ int main(int argc, char *argv[])
 
     QString username = QInputDialog::getText(nullptr, "Введите ваше имя", "Пожалуйста введите имя:");
 
+
     if(username.isEmpty()) {
         return 0;
     }
@@ -242,7 +342,7 @@ int main(int argc, char *argv[])
 
     QMainWindow window;
     window.setWindowTitle("ChatBot");
-    setWindowSize(window, 800, 600);
+    setWindowSize(window, 1000, 800);
     window.setWindowIcon(QIcon("../src/style/ico/cyber.png"));
 
     QWidget *widget = new QWidget();

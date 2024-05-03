@@ -11,8 +11,14 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets)
 
+find_package(CURL REQUIRED)
+include_directories(${CURL_INCLUDE_DIRS})
+
+find_package(nlohmann_json REQUIRED)
+include_directories(${NLOHMANN_JSON_INCLUDE_DIRS})
+
 add_executable(ChatBot 
   src/main.cpp
 )
 
-target_link_libraries(ChatBot Qt6::Core Qt6::Widgets Qt6::Gui)
+target_link_libraries(ChatBot Qt6::Core Qt6::Widgets Qt6::Gui ${CURL_LIBRARIES} ${NLOHMANN_JSON_LIBRARIES})
